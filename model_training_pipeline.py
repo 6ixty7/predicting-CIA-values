@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import KFold, cross_val_predict, GridSearchCV
+from sklearn.model_selection import KFold, cross_val_predict
 from sklearn.linear_model import LinearRegression
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.ensemble import RandomForestRegressor
@@ -56,11 +56,17 @@ missing_cols = sorted(set(required_cols) - set(df.columns))
 if missing_cols:
     raise ValueError(f"CSV is missing required columns: {', '.join(missing_cols)}")
 
-if df[required_cols].isnull().any().any():
-    raise ValueError("CSV contains missing values in the feature or target columns.")
+numeric_df = df[required_cols].apply(pd.to_numeric, errors="coerce")
+if numeric_df.isnull().any().any():
+    raise ValueError(
+        "CSV contains missing or non-numeric values in the feature or target columns."
+    )
 
-X = df[feature_cols].values
-y = df[target_cols].values  # shape: (n_samples, 3)
+if len(numeric_df) < 5:
+    raise ValueError("CSV must contain at least 5 data rows for cross-validation.")
+
+X = numeric_df[feature_cols].values
+y = numeric_df[target_cols].values  # shape: (n_samples, 3)
 
 print(f"Dataset size: {X.shape[0]} samples, {X.shape[1]} features -> {y.shape[1]} targets")
 
@@ -69,7 +75,7 @@ print(f"Dataset size: {X.shape[0]} samples, {X.shape[1]} features -> {y.shape[1]
 # ---------------------------------------------------------------------
 # With a small dataset (50-150 samples), k-fold CV gives a much more
 # reliable performance estimate than one train/test split.
-N_SPLITS = 5
+N_SPLITS = min(5, len(df))
 kf = KFold(n_splits=N_SPLITS, shuffle=True, random_state=42)
 
 
@@ -109,14 +115,16 @@ lin_model = MultiOutputRegressor(LinearRegression())
 evaluate_model(lin_model, X, y, "Linear Regression (baseline)")
 
 # 3b. Partial Least Squares (handles multicollinear RGB/HSV/LAB features well)
-pls_model = PLSRegression(n_components=min(5, X.shape[1]))
+pls_model = PLSRegression(n_components=min(5, X.shape[1], X.shape[0] - 1))
 evaluate_model(pls_model, X, y, "PLS Regression (baseline)")
 
 # ---------------------------------------------------------------------
 # 4. INTERMEDIATE MODEL: RANDOM FOREST
 # ---------------------------------------------------------------------
 rf_model = MultiOutputRegressor(
-    RandomForestRegressor(n_estimators=300, max_depth=None, random_state=42)
+    RandomForestRegressor(
+        n_estimators=300, max_depth=None, random_state=42, n_jobs=-1
+    )
 )
 evaluate_model(rf_model, X, y, "Random Forest")
 
@@ -130,7 +138,9 @@ for i, col in enumerate(target_cols):
 # ---------------------------------------------------------------------
 # 5. ADVANCED MODEL: XGBOOST (with hyperparameter tuning)
 # ---------------------------------------------------------------------
-xgb_base = XGBRegressor(random_state=42, objective="reg:squarederror")
+xgb_base = XGBRegressor(
+    random_state=42, objective="reg:squarederror", n_jobs=-1
+)
 xgb_model = MultiOutputRegressor(xgb_base)
 
 # Small grid search example — expand this once you see which ranges look promising.
@@ -149,7 +159,7 @@ best_params_list = [
     {"n_estimators": 300, "max_depth": 5, "learning_rate": 0.05},
 ]
 for params in best_params_list:
-    model = MultiOutputRegressor(XGBRegressor(random_state=42, **params))
+    model = MultiOutputRegressor(XGBRegressor(random_state=42, n_jobs=-1, **params))
     evaluate_model(model, X, y, f"XGBoost {params}")
 
 # ---------------------------------------------------------------------
